@@ -1,0 +1,32 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Weaver.App"
+             xmlns:local="using:Weaver"
+             xmlns:converters="using:Weaver.Converters"
+             RequestedThemeVariant="Dark">
+
+  <Application.Resources>
+    <converters:Base64ToImageConverter x:Key="Base64ToImageConverter"/>
+    <converters:HexToColorConverter x:Key="HexToColorConverter"/>
+    <converters:TotalWeightConverter x:Key="TotalWeightConverter"/>
+  </Application.Resources>
+
+  <Application.DataTemplates>
+    <local:ViewLocator/>
+  </Application.DataTemplates>
+
+  <Application.Styles>
+
+    <FluentTheme />
+
+    <!-- Custom Button Styles -->
+    <Style Selector="Button.accent">
+      <Setter Property="Background" Value="#0078D4"/>
+      <Setter Property="Foreground" Value="White"/>
+    </Style>
+    <Style Selector="Button.accent:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#106EBE"/>
+    </Style>
+
+  </Application.Styles>
+</Application>

@@ -1,0 +1,341 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Weaver.ViewModels"
+        xmlns:models="using:Weaver.Models"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1200" d:DesignHeight="700"
+        x:Class="Weaver.Views.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="Weaver - 3D Print Job Compiler"
+        Width="1200" Height="700"
+        MinWidth="800" MinHeight="500">
+  <Design.DataContext>
+    <vm:MainWindowViewModel/>
+  </Design.DataContext>
+  <Grid RowDefinitions="Auto,*,Auto">
+    <!-- Toolbar -->
+    <Border Grid.Row="0"
+            Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+            Padding="12" Margin="12,12,12,8"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+            BorderThickness="1" CornerRadius="6"
+            BoxShadow="0 1 3 0 #10000000">
+      <Grid ColumnDefinitions="*,Auto">
+        <!-- Left: Action Buttons -->
+        <StackPanel Grid.Column="0" Orientation="Horizontal"
+                    HorizontalAlignment="Left" Spacing="8">
+          <Button Command="{Binding LoadFilesCommand}"
+                  IsEnabled="{Binding !IsBusy}"
+                  Padding="12,6"
+                  CornerRadius="4">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="📁" FontSize="16"/>
+              <TextBlock Text="Load Files"/>
+            </StackPanel>
+          </Button>
+          <Button Command="{Binding CompileJobsCommand}"
+                  IsEnabled="{Binding !IsBusy}"
+                  Padding="12,6"
+                  CornerRadius="4"
+                  Classes="accent">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="⚙️" FontSize="16"/>
+              <TextBlock Text="Compile Jobs"/>
+            </StackPanel>
+          </Button>
+          <Button Command="{Binding ClearJobsCommand}"
+                  IsEnabled="{Binding !IsBusy}"
+                  Padding="12,6"
+                  CornerRadius="4">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+              <TextBlock Text="🗑️" FontSize="16"/>
+              <TextBlock Text="Clear All"/>
+            </StackPanel>
+          </Button>
+        </StackPanel>
+        <!-- Right: Settings -->
+        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="15">
+          <!-- Printer Selection -->
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="🖨️" FontSize="18" VerticalAlignment="Center"/>
+            <TextBlock Text="Printer:" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <ComboBox ItemsSource="{Binding AvailablePrinters}"
+                      SelectedItem="{Binding SelectedPrinter}"
+                      IsEnabled="{Binding !IsBusy}"
+                      MinWidth="180"
+                      CornerRadius="4">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <TextBlock Text="{Binding DisplayName}"/>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+          <!-- Plate Change Routine Selection -->
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="🔄" FontSize="18" VerticalAlignment="Center"/>
+            <TextBlock Text="Routine:" VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <ComboBox ItemsSource="{Binding AvailablePlateChangeRoutines}"
+                      SelectedItem="{Binding SelectedPlateChangeRoutine}"
+                      IsEnabled="{Binding !IsBusy}"
+                      MinWidth="220"
+                      CornerRadius="4">
+              <ComboBox.ItemTemplate>
+                <DataTemplate>
+                  <StackPanel>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold"/>
+                    <TextBlock Text="{Binding Description}"
+                               FontSize="10"
+                               Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                               TextWrapping="Wrap"/>
+                  </StackPanel>
+                </DataTemplate>
+              </ComboBox.ItemTemplate>
+            </ComboBox>
+          </StackPanel>
+        </StackPanel>
+      </Grid>
+    </Border>
+    <!-- Main Content -->
+    <Grid Grid.Row="1" ColumnDefinitions="3*,2*" Margin="12,0,12,8">
+      <!-- Jobs Grid/List -->
+      <Border Grid.Column="0"
+              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+              BorderThickness="1"
+              CornerRadius="6"
+              Padding="0"
+              Margin="0,0,6,0"
+              BoxShadow="0 1 3 0 #10000000">
+        <Grid RowDefinitions="Auto,*">
+          <!-- Header -->
+          <Border Grid.Row="0"
+                  Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                  Padding="16,12"
+                  BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                  BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="*,Auto">
+              <TextBlock Grid.Column="0"
+                         Text="Print Jobs"
+                         FontSize="18"
+                         FontWeight="Bold"
+                         VerticalAlignment="Center"/>
+              <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding Jobs.Count, StringFormat='{}{0} jobs'}"
+                           FontSize="14"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                           VerticalAlignment="Center"/>
+                <TextBlock FontSize="14"
+                           Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"
+                           VerticalAlignment="Center"
+                           IsVisible="{Binding !!Jobs.Count}">
+                  <Run Text="Total: "/>
+                  <Run Text="{Binding TotalPrintTime, StringFormat='{}{0:hh\\:mm\\:ss}'}"/>
+                </TextBlock>
+              </StackPanel>
+            </Grid>
+          </Border>
+          <!-- Jobs Cards -->
+          <ScrollViewer Grid.Row="1" Padding="12">
+            <ItemsControl ItemsSource="{Binding Jobs}">
+              <ItemsControl.ItemsPanel>
+                <ItemsPanelTemplate>
+                  <WrapPanel Orientation="Horizontal"/>
+                </ItemsPanelTemplate>
+              </ItemsControl.ItemsPanel>
+              <ItemsControl.ItemTemplate>
+                <DataTemplate DataType="models:ThreeMFJob">
+                  <!-- Job Card -->
+                  <Border Width="240"
+                          Margin="6"
+                          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1"
+                          CornerRadius="8"
+                          Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                          BoxShadow="0 2 4 0 #15000000">
+                    <Border.Styles>
+                      <Style Selector="Border:pointerover">
+                        <Setter Property="BoxShadow" Value="0 4 8 0 #25000000"/>
+                        <Setter Property="BorderBrush" Value="#0078D4"/>
+                      </Style>
+                    </Border.Styles>
+                    <Grid RowDefinitions="160,Auto,Auto,Auto">
+                      <!-- Preview Image -->
+                      <Border Grid.Row="0"
+                              Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                              CornerRadius="8,8,0,0"
+                              ClipToBounds="True">
+                        <Panel>
+                          <!-- Actual thumbnail if available -->
+                          <Image IsVisible="{Binding ModelImage, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                 Stretch="UniformToFill"
+                                 HorizontalAlignment="Center"
+                                 VerticalAlignment="Center">
+                            <Image.Source>
+                              <Binding Path="ModelImage" Converter="{StaticResource Base64ToImageConverter}"/>
+                            </Image.Source>
+                          </Image>
+                          <!-- Placeholder if no thumbnail -->
+                          <TextBlock IsVisible="{Binding ModelImage, Converter={x:Static ObjectConverters.IsNull}}"
+                                     Text="🖼️"
+                                     FontSize="64"
+                                     Foreground="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                                     HorizontalAlignment="Center"
+                                     VerticalAlignment="Center"/>
+                        </Panel>
+                      </Border>
+                      <!-- Job Name -->
+                      <Border Grid.Row="1"
+                              Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                              Padding="12,10">
+                        <TextBlock Text="{Binding PlateName}"
+                                   FontWeight="Bold"
+                                   FontSize="14"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding PlateName}"/>
+                      </Border>
+                      <!-- Metadata -->
+                      <Border Grid.Row="2" Padding="12,8">
+                        <StackPanel Spacing="8">
+                          <!-- Print Time -->
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="⏱️" FontSize="14"/>
+                            <TextBlock FontSize="13"
+                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}">
+                              <Run Text="{Binding PrintTime, StringFormat='{}{0:hh\\:mm\\:ss}'}"/>
+                            </TextBlock>
+                          </StackPanel>
+                          <!-- Filaments -->
+                          <StackPanel Spacing="4">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                              <TextBlock Text="🎨" FontSize="14"/>
+                              <TextBlock Text="{Binding Filaments.Length, StringFormat='{}{0} filament(s)'}"
+                                         FontSize="13"
+                                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+                            </StackPanel>
+                            <!-- Filament Color Swatches -->
+                            <ItemsControl ItemsSource="{Binding Filaments}">
+                              <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                  <WrapPanel Orientation="Horizontal"/>
+                                </ItemsPanelTemplate>
+                              </ItemsControl.ItemsPanel>
+                              <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="models:Filament">
+                                  <Border Width="24"
+                                          Height="24"
+                                          CornerRadius="4"
+                                          Margin="2"
+                                          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                                          BorderThickness="1"
+                                          ToolTip.Tip="{Binding FilamentKind}">
+                                    <Border.Background>
+                                      <Binding Path="ColorHex" Converter="{StaticResource HexToColorConverter}"/>
+                                    </Border.Background>
+                                  </Border>
+                                </DataTemplate>
+                              </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </StackPanel>
+                          <!-- Weight -->
+                          <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="⚖️" FontSize="14"/>
+                            <TextBlock FontSize="13"
+                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}">
+                              <Run Text="{Binding ., Converter={StaticResource TotalWeightConverter}, StringFormat='{}{0:F1}g'}"/>
+                            </TextBlock>
+                          </StackPanel>
+                        </StackPanel>
+                      </Border>
+                      <!-- Actions -->
+                      <Border Grid.Row="3"
+                              Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                              Padding="8"
+                              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                              BorderThickness="0,1,0,0">
+                        <StackPanel Orientation="Horizontal"
+                                    HorizontalAlignment="Right"
+                                    Spacing="6">
+                          <Button Content="Remove"
+                                  FontSize="11"
+                                  Padding="8,4"
+                                  CornerRadius="4"
+                                  Command="{Binding $parent[Window].DataContext.RemoveJobCommand}"
+                                  CommandParameter="{Binding}"/>
+                        </StackPanel>
+                      </Border>
+                    </Grid>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Grid>
+      </Border>
+      <!-- Logs Panel -->
+      <Border Grid.Column="1"
+              BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+              BorderThickness="1"
+              CornerRadius="6"
+              Padding="0"
+              Margin="6,0,0,0"
+              BoxShadow="0 1 3 0 #10000000">
+        <Grid RowDefinitions="Auto,*">
+          <!-- Header -->
+          <Border Grid.Row="0"
+                  Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
+                  Padding="16,12"
+                  BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                  BorderThickness="0,0,0,1">
+            <TextBlock Text="Activity Log"
+                       FontSize="18"
+                       FontWeight="Bold"/>
+          </Border>
+          <!-- Log Entries -->
+          <ScrollViewer Grid.Row="1" Padding="12">
+            <ItemsControl ItemsSource="{Binding Logs}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Border Padding="8,6"
+                          Margin="0,2"
+                          Background="{DynamicResource SystemControlBackgroundBaseLowBrush}"
+                          CornerRadius="4"
+                          BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+                          BorderThickness="1">
+                    <TextBlock Text="{Binding}"
+                               FontFamily="Consolas,Courier New"
+                               FontSize="11"
+                               TextWrapping="Wrap"/>
+                  </Border>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </Grid>
+      </Border>
+    </Grid>
+    <!-- Status Bar -->
+    <Border Grid.Row="2"
+            Background="{DynamicResource SystemControlBackgroundAltMediumLowBrush}"
+            Padding="16,10"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
+            BorderThickness="0,1,0,0">
+      <Grid ColumnDefinitions="*,Auto">
+        <TextBlock Grid.Column="0"
+                   Text="{Binding StatusMessage}"
+                   VerticalAlignment="Center"
+                   FontSize="13"/>
+        <StackPanel Grid.Column="1"
+                    Orientation="Horizontal"
+                    Spacing="12">
+          <ProgressBar IsIndeterminate="{Binding IsBusy}"
+                       Width="120"
+                       Height="6"
+                       CornerRadius="3"
+                       IsVisible="{Binding IsBusy}"/>
+        </StackPanel>
+      </Grid>
+    </Border>
+  </Grid>
+</Window>
