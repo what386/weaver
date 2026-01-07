@@ -56,13 +56,13 @@ package_platform() {
     echo -e "${YELLOW}▶ Packaging $rid${NC}"
 
     if is_windows "$rid"; then
-        output_file="$DIST_DIR/${base_name}.zip"
+        output_file="$(realpath "$DIST_DIR")/${base_name}.zip"
         (
             cd "$src_dir"
             zip -r "$output_file" . >/dev/null
         )
     else
-        output_file="$DIST_DIR/${base_name}.tar.gz"
+        output_file="$(realpath "$DIST_DIR")/${base_name}.tar.gz"
         (
             cd "$src_dir"
             tar -czf "$output_file" .
