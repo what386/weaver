@@ -288,9 +288,9 @@ public partial class MainWindowViewModel : ViewModelBase
         foreach (var job in Jobs)
             job.IsSelected = true;
 
+        // Force UI update
         OnPropertyChanged(nameof(TotalPrintTime));
         OnPropertyChanged(nameof(SelectedJobCount));
-        OnPropertyChanged(nameof(Jobs));
         AddLog($"✓ Selected all {Jobs.Count} jobs");
     }
 
@@ -300,10 +300,17 @@ public partial class MainWindowViewModel : ViewModelBase
         foreach (var job in Jobs)
             job.IsSelected = false;
 
+        // Force UI update
         OnPropertyChanged(nameof(TotalPrintTime));
         OnPropertyChanged(nameof(SelectedJobCount));
-        OnPropertyChanged(nameof(Jobs));
         AddLog($"○ Deselected all jobs");
+    }
+
+    [RelayCommand]
+    private void RefreshSelectionStats()
+    {
+        OnPropertyChanged(nameof(TotalPrintTime));
+        OnPropertyChanged(nameof(SelectedJobCount));
     }
 
     public async Task LoadFilesFromPathsAsync(IEnumerable<string> paths)

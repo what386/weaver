@@ -249,28 +249,12 @@
                       <Border Grid.Row="1"
                               Background="{DynamicResource SystemControlBackgroundAltHighBrush}"
                               Padding="12,10">
-                        <Grid ColumnDefinitions="Auto,*">
-                          <Border Grid.Column="0"
-                                  Background="#0078D4"
-                                  CornerRadius="12"
-                                  Width="24"
-                                  Height="24"
-                                  Margin="0,0,8,0">
-                            <TextBlock Text="#"
-                                       Foreground="White"
-                                       FontSize="12"
-                                       FontWeight="Bold"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"/>
-                          </Border>
-                          <TextBlock Grid.Column="1"
-                                     Text="{Binding PlateName}"
-                                     FontWeight="Bold"
-                                     FontSize="14"
-                                     TextTrimming="CharacterEllipsis"
-                                     ToolTip.Tip="{Binding PlateName}"
-                                     VerticalAlignment="Center"/>
-                        </Grid>
+                        <TextBlock Text="{Binding PlateName}"
+                                   FontWeight="Bold"
+                                   FontSize="14"
+                                   TextTrimming="CharacterEllipsis"
+                                   ToolTip.Tip="{Binding PlateName}"
+                                   VerticalAlignment="Center"/>
                       </Border>
                       <!-- Metadata -->
                       <Border Grid.Row="2" Padding="12,8">
@@ -338,7 +322,8 @@
                                     Content="Include in compile"
                                     VerticalAlignment="Center"
                                     Margin="4,0,0,0"
-                                    FontSize="12"/>
+                                    FontSize="12"
+                                    Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).RefreshSelectionStatsCommand}"/>
                           <!-- Remove button on right -->
                           <Button Grid.Column="1"
                                   Content="Remove"
