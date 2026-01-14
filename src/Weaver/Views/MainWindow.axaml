@@ -180,7 +180,6 @@
                     <Border.Styles>
                       <Style Selector="Border:pointerover">
                         <Setter Property="BoxShadow" Value="0 4 8 0 #25000000"/>
-                        <Setter Property="BorderBrush" Value="#0078D4"/>
                       </Style>
                     </Border.Styles>
                     <Border.ContextMenu>
@@ -267,27 +266,29 @@
                               <Run Text="{Binding PrintTime, StringFormat='{}{0:hh\\:mm\\:ss}'}"/>
                             </TextBlock>
                           </StackPanel>
-                          <!-- Filaments -->
-                          <StackPanel Spacing="4">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                              <TextBlock Text="🎨" FontSize="14"/>
-                              <TextBlock Text="{Binding Filaments.Length, StringFormat='{}{0} filament(s)'}"
-                                         FontSize="13"
-                                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}"/>
+
+                          <!-- Weight with Filament Swatches -->
+                          <Grid ColumnDefinitions="Auto,*">
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">
+                              <TextBlock FontSize="13"
+                                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}">
+                                <Run Text="{Binding ., Converter={StaticResource TotalWeightConverter}, StringFormat='{}{0:F1}g'}"/>
+                              </TextBlock>
                             </StackPanel>
-                            <!-- Filament Color Swatches -->
-                            <ItemsControl ItemsSource="{Binding Filaments}">
+                            <!-- Filament Color Swatches on right -->
+                            <ItemsControl Grid.Column="1" ItemsSource="{Binding Filaments}"
+                                          HorizontalAlignment="Right">
                               <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                  <WrapPanel Orientation="Horizontal"/>
+                                  <StackPanel Orientation="Horizontal"/>
                                 </ItemsPanelTemplate>
                               </ItemsControl.ItemsPanel>
                               <ItemsControl.ItemTemplate>
                                 <DataTemplate DataType="models:Filament">
-                                  <Border Width="24"
-                                          Height="24"
-                                          CornerRadius="4"
-                                          Margin="2"
+                                  <Border Width="20"
+                                          Height="20"
+                                          CornerRadius="3"
+                                          Margin="2,0"
                                           BorderBrush="{DynamicResource SystemControlForegroundBaseMediumLowBrush}"
                                           BorderThickness="1"
                                           ToolTip.Tip="{Binding FilamentKind}">
@@ -298,15 +299,7 @@
                                 </DataTemplate>
                               </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                          </StackPanel>
-                          <!-- Weight -->
-                          <StackPanel Orientation="Horizontal" Spacing="6">
-                            <TextBlock Text="⚖️" FontSize="14"/>
-                            <TextBlock FontSize="13"
-                                       Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}">
-                              <Run Text="{Binding ., Converter={StaticResource TotalWeightConverter}, StringFormat='{}{0:F1}g'}"/>
-                            </TextBlock>
-                          </StackPanel>
+                          </Grid>
                         </StackPanel>
                       </Border>
                       <!-- Actions -->
