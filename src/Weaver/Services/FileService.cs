@@ -67,6 +67,7 @@ public static class WeaverFileTypes
 public interface IFileService
 {
     Task<FileLoadResult?> LoadFilesAsync(Window parentWindow);
+    Task<FileLoadResult?> LoadFileFromPathAsync(string path);
     Task<bool> SaveGCodeAsync(Window parentWindow, string content, string suggestedFileName);
     Task<bool> Save3MFAsync(Window parentWindow, byte[] content, string suggestedFileName);
     Task<string?> PickSaveLocationAsync(Window parentWindow, string suggestedFileName, FilePickerFileType fileType);
@@ -90,7 +91,6 @@ public sealed class FileService : IFileService
     public async Task<FileLoadResult?> LoadFilesAsync(Window parentWindow)
     {
         var storageProvider = parentWindow.StorageProvider;
-
         if (!storageProvider.CanOpen)
             return null;
 
@@ -120,11 +120,126 @@ public sealed class FileService : IFileService
         };
 
         var files = await storageProvider.OpenFilePickerAsync(options);
-
         if (files == null || files.Count == 0)
             return null;
 
         return await ProcessFilesAsync(files);
+    }
+
+    /// <summary>
+    /// Loads a file from a file path (for drag & drop support).
+    /// </summary>
+    public async Task<FileLoadResult?> LoadFileFromPathAsync(string path)
+    {
+        if (!File.Exists(path))
+        {
+            return new FileLoadResult(
+                Array.Empty<ThreeMFJob>(),
+                new[] { new FileLoadDiagnostic(FileLoadSeverity.Error, Path.GetFileName(path), "File not found") }
+            );
+        }
+
+        var fileName = Path.GetFileName(path);
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        var diagnostics = new List<FileLoadDiagnostic>();
+        var jobs = new List<ThreeMFJob>();
+
+        try
+        {
+            switch (extension)
+            {
+                case ".3mf":
+                    await using (var stream = File.OpenRead(path))
+                    {
+                        var result = await _extractor.ExtractJobs(stream);
+
+                        // Add extraction diagnostics
+                        foreach (var diag in result.Diagnostics)
+                        {
+                            diagnostics.Add(new FileLoadDiagnostic(
+                                diag.Severity switch
+                                {
+                                    ExtractionSeverity.Error => FileLoadSeverity.Error,
+                                    ExtractionSeverity.Warning => FileLoadSeverity.Warning,
+                                    _ => FileLoadSeverity.Info
+                                },
+                                fileName,
+                                diag.Message
+                            ));
+                        }
+
+                        if (result.IsSuccess)
+                        {
+                            jobs.AddRange(result.Jobs);
+                        }
+                    }
+                    break;
+
+                case ".gcode":
+                    var content = await File.ReadAllTextAsync(path);
+
+                    if (!_parser.ValidateGCodeFile(content))
+                    {
+                        diagnostics.Add(new FileLoadDiagnostic(
+                            FileLoadSeverity.Error,
+                            fileName,
+                            "File does not contain valid G-code metadata"
+                        ));
+                        break;
+                    }
+
+                    var parseResult = _parser.ParseGCodeFile(content, fileName);
+
+                    // Add parse diagnostics
+                    foreach (var diag in parseResult.Diagnostics)
+                    {
+                        diagnostics.Add(new FileLoadDiagnostic(
+                            diag.Severity switch
+                            {
+                                ParseDiagnosticSeverity.Error => FileLoadSeverity.Error,
+                                ParseDiagnosticSeverity.Warning => FileLoadSeverity.Warning,
+                                _ => FileLoadSeverity.Info
+                            },
+                            fileName,
+                            diag.Message
+                        ));
+                    }
+
+                    if (!parseResult.HasErrors)
+                    {
+                        var metadata = parseResult.Metadata;
+                        var job = new ThreeMFJob(
+                            PlateName: metadata.PlateName,
+                            Filaments: metadata.Filaments,
+                            EmbeddedGCode: metadata.GCode,
+                            Printer: DeterminePrinterFromMetadata(metadata.PrinterModel),
+                            Routine: null,
+                            PrintTime: metadata.PrintTime,
+                            ModelImage: metadata.ModelImage
+                        );
+                        jobs.Add(job);
+                    }
+                    break;
+
+                default:
+                    diagnostics.Add(new FileLoadDiagnostic(
+                        FileLoadSeverity.Warning,
+                        fileName,
+                        $"Unsupported file type: {extension}"
+                    ));
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            diagnostics.Add(new FileLoadDiagnostic(
+                FileLoadSeverity.Error,
+                fileName,
+                $"Failed to load file: {ex.Message}"
+            ));
+        }
+
+        return new FileLoadResult(jobs.ToArray(), diagnostics);
     }
 
     /// <summary>
@@ -155,7 +270,6 @@ public sealed class FileService : IFileService
         }
         catch (Exception ex)
         {
-            // Log error or show dialog
             Console.WriteLine($"Failed to save G-code: {ex.Message}");
             return false;
         }
@@ -189,7 +303,6 @@ public sealed class FileService : IFileService
         }
         catch (Exception ex)
         {
-            // Log error or show dialog
             Console.WriteLine($"Failed to save 3MF: {ex.Message}");
             return false;
         }
@@ -204,7 +317,6 @@ public sealed class FileService : IFileService
         FilePickerFileType fileType)
     {
         var storageProvider = parentWindow.StorageProvider;
-
         if (!storageProvider.CanSave)
             return null;
 
@@ -217,7 +329,6 @@ public sealed class FileService : IFileService
         };
 
         var file = await storageProvider.SaveFilePickerAsync(options);
-
         return file?.Path.LocalPath;
     }
 
@@ -229,7 +340,6 @@ public sealed class FileService : IFileService
         FilePickerOpenOptions options)
     {
         var storageProvider = parentWindow.StorageProvider;
-
         if (!storageProvider.CanOpen)
             return null;
 
@@ -355,15 +465,12 @@ public sealed class FileService : IFileService
         if (!parseResult.HasErrors)
         {
             var metadata = parseResult.Metadata;
-
-            // Create a job from the parsed metadata
-            // Note: Printer and Routine need to be set by the user
             var job = new ThreeMFJob(
                 PlateName: metadata.PlateName,
                 Filaments: metadata.Filaments,
                 EmbeddedGCode: metadata.GCode,
                 Printer: DeterminePrinterFromMetadata(metadata.PrinterModel),
-                Routine: null, // User must assign
+                Routine: null,
                 PrintTime: metadata.PrintTime,
                 ModelImage: metadata.ModelImage
             );

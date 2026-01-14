@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using System.Threading.Tasks;
@@ -37,7 +38,9 @@ public partial class MainWindowViewModel : ViewModelBase
     public ObservableCollection<PlateChangeRoutine> AvailablePlateChangeRoutines { get; }
 
     public TimeSpan TotalPrintTime =>
-        TimeSpan.FromSeconds(Jobs.Sum(j => j.PrintTime.TotalSeconds));
+        TimeSpan.FromSeconds(Jobs.Where(j => j.IsSelected).Sum(j => j.PrintTime.TotalSeconds));
+
+    public int SelectedJobCount => Jobs.Count(j => j.IsSelected);
 
     public MainWindowViewModel()
     {
@@ -73,8 +76,12 @@ public partial class MainWindowViewModel : ViewModelBase
         _selectedPrinter = AvailablePrinters[0];
         _selectedPlateChangeRoutine = AvailablePlateChangeRoutines[0];
 
-        // Watch for job collection changes to update TotalPrintTime
-        Jobs.CollectionChanged += (_, _) => OnPropertyChanged(nameof(TotalPrintTime));
+        // Watch for job collection changes to update properties
+        Jobs.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(TotalPrintTime));
+            OnPropertyChanged(nameof(SelectedJobCount));
+        };
     }
 
     [RelayCommand]
@@ -97,7 +104,6 @@ public partial class MainWindowViewModel : ViewModelBase
             }
 
             var result = await _fileService.LoadFilesAsync(topLevel);
-
             if (result == null)
             {
                 StatusMessage = "File loading cancelled";
@@ -144,9 +150,11 @@ public partial class MainWindowViewModel : ViewModelBase
     [RelayCommand]
     private async Task CompileJobs()
     {
-        if (Jobs.Count == 0)
+        var selectedJobs = Jobs.Where(j => j.IsSelected).ToList();
+
+        if (selectedJobs.Count == 0)
         {
-            AddLog("⚠ No jobs to compile");
+            AddLog("⚠ No jobs selected for compilation");
             return;
         }
 
@@ -160,10 +168,10 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             IsBusy = true;
             StatusMessage = "Compiling jobs...";
-            AddLog($"Compiling {Jobs.Count} job(s)...");
+            AddLog($"Compiling {selectedJobs.Count} selected job(s)...");
 
             var result = await Task.Run(() =>
-                _compiler.Compile(Jobs, SelectedPrinter, SelectedPlateChangeRoutine)
+                _compiler.Compile(selectedJobs, SelectedPrinter, SelectedPlateChangeRoutine)
             );
 
             if (result.HasErrors)
@@ -185,7 +193,7 @@ public partial class MainWindowViewModel : ViewModelBase
             // Package into 3MF on background thread
             AddLog("Packaging into 3MF format...");
             var threeMFData = await Task.Run(() =>
-                _threeMFCompiler.CompileMultiJob(result.Output, Jobs.ToArray(), SelectedPrinter)
+                _threeMFCompiler.CompileMultiJob(result.Output, selectedJobs.ToArray(), SelectedPrinter)
             );
 
             // Export compiled 3MF
@@ -200,9 +208,9 @@ public partial class MainWindowViewModel : ViewModelBase
                 return;
             }
 
-            var suggestedFileName = Jobs.Count == 1
-                ? $"{Jobs[0].PlateName}_compiled.gcode.3mf"
-                : $"multi_job_{Jobs.Count}plates_{DateTime.Now:yyyyMMdd_HHmmss}.gcode.3mf";
+            var suggestedFileName = selectedJobs.Count == 1
+                ? $"{selectedJobs[0].PlateName}_compiled.gcode.3mf"
+                : $"multi_job_{selectedJobs.Count}plates_{DateTime.Now:yyyyMMdd_HHmmss}.gcode.3mf";
 
             var saved = await _fileService.Save3MFAsync(
                 topLevel,
@@ -249,6 +257,106 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             AddLog($"✓ Removed job: {job.PlateName}");
             StatusMessage = $"Removed {job.PlateName}";
+        }
+    }
+
+    [RelayCommand]
+    private void MoveJobUp(ThreeMFJob job)
+    {
+        var index = Jobs.IndexOf(job);
+        if (index > 0)
+        {
+            Jobs.Move(index, index - 1);
+            AddLog($"↑ Moved '{job.PlateName}' up");
+        }
+    }
+
+    [RelayCommand]
+    private void MoveJobDown(ThreeMFJob job)
+    {
+        var index = Jobs.IndexOf(job);
+        if (index < Jobs.Count - 1)
+        {
+            Jobs.Move(index, index + 1);
+            AddLog($"↓ Moved '{job.PlateName}' down");
+        }
+    }
+
+    [RelayCommand]
+    private void SelectAllJobs()
+    {
+        foreach (var job in Jobs)
+            job.IsSelected = true;
+
+        OnPropertyChanged(nameof(TotalPrintTime));
+        OnPropertyChanged(nameof(SelectedJobCount));
+        OnPropertyChanged(nameof(Jobs));
+        AddLog($"✓ Selected all {Jobs.Count} jobs");
+    }
+
+    [RelayCommand]
+    private void DeselectAllJobs()
+    {
+        foreach (var job in Jobs)
+            job.IsSelected = false;
+
+        OnPropertyChanged(nameof(TotalPrintTime));
+        OnPropertyChanged(nameof(SelectedJobCount));
+        OnPropertyChanged(nameof(Jobs));
+        AddLog($"○ Deselected all jobs");
+    }
+
+    public async Task LoadFilesFromPathsAsync(IEnumerable<string> paths)
+    {
+        try
+        {
+            IsBusy = true;
+            StatusMessage = "Loading dropped files...";
+
+            var pathList = paths.ToList();
+            AddLog($"Processing {pathList.Count} dropped file(s)...");
+
+            // Process each file
+            var loadedCount = 0;
+            foreach (var path in pathList)
+            {
+                try
+                {
+                    var result = await _fileService.LoadFileFromPathAsync(path);
+                    if (result != null && result.IsSuccess)
+                    {
+                        foreach (var job in result.Jobs)
+                        {
+                            Jobs.Add(job);
+                        }
+                        loadedCount += result.Jobs.Length;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddLog($"✗ Failed to load {System.IO.Path.GetFileName(path)}: {ex.Message}");
+                }
+            }
+
+            if (loadedCount > 0)
+            {
+                AddLog($"✓ Loaded {loadedCount} job(s) from dropped files");
+                StatusMessage = $"Loaded {loadedCount} jobs";
+            }
+            else
+            {
+                AddLog("⚠ No valid jobs found in dropped files");
+                StatusMessage = "No jobs loaded";
+            }
+        }
+        catch (Exception ex)
+        {
+            AddLog($"✗ Error processing dropped files: {ex.Message}");
+            StatusMessage = "Error loading files";
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 

@@ -1,14 +1,16 @@
 namespace Weaver.Models;
 using System;
 
-// Updated to make Routine nullable since not all printers have plate changers
 public record ThreeMFJob(
     string PlateName,
     Filament[] Filaments,
     GCodeRoutine EmbeddedGCode,
     Printer Printer,
-    PlateChangeRoutine? Routine,  // Made nullable
+    PlateChangeRoutine? Routine,
     TimeSpan PrintTime,
     string? ModelImage
-) {
+)
+{
+    // Make IsSelected mutable for UI binding
+    public bool IsSelected { get; set; } = true;
 }
