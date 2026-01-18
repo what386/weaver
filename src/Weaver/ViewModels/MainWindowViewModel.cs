@@ -104,6 +104,7 @@ public partial class MainWindowViewModel : ViewModelBase
             }
 
             var result = await _fileService.LoadFilesAsync(topLevel);
+
             if (result == null)
             {
                 StatusMessage = "File loading cancelled";
@@ -158,6 +159,14 @@ public partial class MainWindowViewModel : ViewModelBase
             return;
         }
 
+        // Verify first job has a source 3MF file
+        if (selectedJobs[0].Source3MFFile == null)
+        {
+            AddLog("✗ First selected job must be from a 3MF file (not standalone G-code)");
+            AddLog("  The first job's 3MF will be used as the template for the output");
+            return;
+        }
+
         if (SelectedPlateChangeRoutine == null)
         {
             AddLog("⚠ No plate change routine selected");
@@ -168,8 +177,10 @@ public partial class MainWindowViewModel : ViewModelBase
         {
             IsBusy = true;
             StatusMessage = "Compiling jobs...";
+
             AddLog($"Compiling {selectedJobs.Count} selected job(s)...");
 
+            // Compile G-code
             var result = await Task.Run(() =>
                 _compiler.Compile(selectedJobs, SelectedPrinter, SelectedPlateChangeRoutine)
             );
@@ -190,13 +201,13 @@ public partial class MainWindowViewModel : ViewModelBase
                     AddLog($"  ⚠ {warning}");
             }
 
-            // Package into 3MF on background thread
-            AddLog("Packaging into 3MF format...");
+            // Create 3MF with injected G-code
+            AddLog("Creating 3MF file with compiled G-code...");
             var threeMFData = await Task.Run(() =>
-                _threeMFCompiler.CompileMultiJob(result.Output, selectedJobs.ToArray(), SelectedPrinter)
+                _threeMFCompiler.CompileMultiJob(result.Output, selectedJobs.ToArray())
             );
 
-            // Export compiled 3MF
+            // Save the file
             var topLevel = App.Current?.ApplicationLifetime is
                 Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime desktop
                 ? desktop.MainWindow
@@ -212,16 +223,12 @@ public partial class MainWindowViewModel : ViewModelBase
                 ? $"{selectedJobs[0].PlateName}_compiled.gcode.3mf"
                 : $"multi_job_{selectedJobs.Count}plates_{DateTime.Now:yyyyMMdd_HHmmss}.gcode.3mf";
 
-            var saved = await _fileService.Save3MFAsync(
-                topLevel,
-                threeMFData,
-                suggestedFileName
-            );
+            var saved = await _fileService.Save3MFAsync(topLevel, threeMFData, suggestedFileName);
 
             if (saved)
             {
                 AddLog($"✓ Compilation successful! Total time: {result.TotalPrintTime:hh\\:mm\\:ss}");
-                AddLog($"✓ Exported as 3MF package: {suggestedFileName}");
+                AddLog($"✓ Saved as: {suggestedFileName}");
                 StatusMessage = "Compilation successful";
             }
             else

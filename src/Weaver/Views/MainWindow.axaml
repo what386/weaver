@@ -266,7 +266,6 @@
                               <Run Text="{Binding PrintTime, StringFormat='{}{0:hh\\:mm\\:ss}'}"/>
                             </TextBlock>
                           </StackPanel>
-
                           <!-- Weight with Filament Swatches -->
                           <Grid ColumnDefinitions="Auto,*">
                             <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6">

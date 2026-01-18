@@ -1,4 +1,5 @@
 namespace Weaver.Models;
+
 using System;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -10,7 +11,8 @@ public record ThreeMFJob(
     Printer Printer,
     PlateChangeRoutine? Routine,
     TimeSpan PrintTime,
-    string? ModelImage
+    string? ModelImage,
+    byte[]? Source3MFFile  // The original 3MF file bytes (null for standalone .gcode)
 ) : INotifyPropertyChanged
 {
     private bool _isSelected = true;

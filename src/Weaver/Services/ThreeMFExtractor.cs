@@ -4,9 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Linq;
 using System.Text;
-using System.Text.Json;
 using System.Threading.Tasks;
-using System.Xml.Linq;
 using Weaver.Models;
 
 namespace Weaver.Services;
@@ -22,10 +20,8 @@ public sealed record ExtractionResult(
 {
     public bool HasErrors =>
         Diagnostics.Any(d => d.Severity == ExtractionSeverity.Error);
-
     public bool HasWarnings =>
         Diagnostics.Any(d => d.Severity == ExtractionSeverity.Warning);
-
     public bool IsSuccess => Jobs.Length > 0 && !HasErrors;
 }
 
@@ -54,15 +50,25 @@ public sealed class ThreeMFExtractor
 
     /// <summary>
     /// Extracts all jobs from a 3MF file and parses their metadata.
+    /// Stores the original 3MF file bytes for later modification.
     /// </summary>
     public async Task<ExtractionResult> ExtractJobs(Stream stream)
     {
         var diagnostics = new List<ExtractionDiagnostic>();
         var jobs = new List<ThreeMFJob>();
 
+        // Read entire 3MF into memory
+        byte[] source3MFData;
+        using (var ms = new MemoryStream())
+        {
+            await stream.CopyToAsync(ms);
+            source3MFData = ms.ToArray();
+        }
+
         try
         {
-            using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
+            using var archiveStream = new MemoryStream(source3MFData);
+            using var archive = new ZipArchive(archiveStream, ZipArchiveMode.Read);
 
             // Find all G-code files
             var gcodeEntries = archive.Entries
@@ -78,15 +84,15 @@ public sealed class ThreeMFExtractor
                 return new ExtractionResult(Array.Empty<ThreeMFJob>(), diagnostics);
             }
 
-            // Extract printer information from metadata
+            // Extract printer information
             var printer = await ExtractPrinterInfo(archive, diagnostics);
 
-            // Process each G-code file
+            // Process each G-code file (typically just one: plate_1.gcode)
             foreach (var entry in gcodeEntries)
             {
                 try
                 {
-                    var job = await ExtractJob(archive, entry, printer, diagnostics);
+                    var job = await ExtractJob(archive, entry, printer, source3MFData, diagnostics);
                     if (job != null)
                         jobs.Add(job);
                 }
@@ -119,36 +125,6 @@ public sealed class ThreeMFExtractor
     }
 
     /// <summary>
-    /// Extracts G-code content only (legacy method).
-    /// </summary>
-    public async Task<IReadOnlyList<GCodeEntry>> ExtractGCodeFiles(Stream stream)
-    {
-        using var archive = new ZipArchive(stream, ZipArchiveMode.Read, leaveOpen: true);
-
-        var gcodeFiles = archive.Entries
-            .Where(e => e.Name.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase))
-            .ToList();
-
-        if (gcodeFiles.Count == 0)
-            throw new InvalidOperationException("No G-code files found in 3MF archive");
-
-        var result = new List<GCodeEntry>();
-
-        foreach (var entry in gcodeFiles)
-        {
-            using var reader = new StreamReader(entry.Open(), Encoding.UTF8);
-            var content = await reader.ReadToEndAsync();
-
-            result.Add(new GCodeEntry(
-                Name: Path.GetFileNameWithoutExtension(entry.Name),
-                Content: content
-            ));
-        }
-
-        return result;
-    }
-
-    /// <summary>
     /// Extracts jobs from a file path.
     /// </summary>
     public async Task<ExtractionResult> ExtractFromFile(string path)
@@ -165,21 +141,11 @@ public sealed class ThreeMFExtractor
         return await ExtractJobs(fs);
     }
 
-    /// <summary>
-    /// Extracts jobs from byte array.
-    /// </summary>
-    public async Task<ExtractionResult> ExtractFromBytes(byte[] data)
-    {
-        using var ms = new MemoryStream(data);
-        return await ExtractJobs(ms);
-    }
-
-    // ---------- Private extraction methods ----------
-
     private async Task<ThreeMFJob?> ExtractJob(
         ZipArchive archive,
         ZipArchiveEntry gcodeEntry,
         Printer printer,
+        byte[] source3MFData,
         List<ExtractionDiagnostic> diagnostics)
     {
         // Read G-code content
@@ -218,10 +184,10 @@ public sealed class ThreeMFExtractor
 
         var metadata = parseResult.Metadata;
 
-        // Extract thumbnail for this plate
+        // Extract thumbnail
         var thumbnail = await ExtractThumbnail(archive, gcodeEntry.Name);
 
-        // Determine appropriate plate change routine
+        // Determine plate change routine
         var routine = DeterminePlateChangeRoutine(printer.Model, diagnostics);
 
         return new ThreeMFJob(
@@ -231,7 +197,8 @@ public sealed class ThreeMFExtractor
             Printer: printer,
             Routine: routine,
             PrintTime: metadata.PrintTime,
-            ModelImage: thumbnail ?? metadata.ModelImage
+            ModelImage: thumbnail ?? metadata.ModelImage,
+            Source3MFFile: source3MFData  // Store the original 3MF for later use
         );
     }
 
@@ -239,77 +206,23 @@ public sealed class ThreeMFExtractor
         ZipArchive archive,
         List<ExtractionDiagnostic> diagnostics)
     {
-        // Try to extract printer info from project settings
-        var projectSettingsEntry = archive.Entries
-            .FirstOrDefault(e => e.FullName.Contains("project_settings.config"));
+        // Try to extract from G-code metadata first
+        var gcodeEntry = archive.Entries
+            .FirstOrDefault(e => e.Name.EndsWith(".gcode", StringComparison.OrdinalIgnoreCase));
 
-        if (projectSettingsEntry != null)
+        if (gcodeEntry != null)
         {
-            try
+            using var reader = new StreamReader(gcodeEntry.Open(), Encoding.UTF8);
+            var content = await reader.ReadToEndAsync();
+            var lines = content.Split('\n');
+
+            var modelLine = lines.FirstOrDefault(l => l.StartsWith("; printer_model =", StringComparison.OrdinalIgnoreCase));
+            if (modelLine != null)
             {
-                using var reader = new StreamReader(projectSettingsEntry.Open(), Encoding.UTF8);
-                var json = await reader.ReadToEndAsync();
-                var doc = JsonDocument.Parse(json);
-
-                if (doc.RootElement.TryGetProperty("project", out var project))
-                {
-                    if (project.TryGetProperty("printer_model", out var modelProp))
-                    {
-                        var modelStr = modelProp.GetString();
-                        if (Enum.TryParse<PrinterModel>(modelStr, true, out var model))
-                        {
-                            return model switch
-                            {
-                                PrinterModel.A1M => Printers.A1M,
-                                PrinterModel.A1 => Printers.A1,
-                                _ => Printers.A1M
-                            };
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                diagnostics.Add(new ExtractionDiagnostic(
-                    ExtractionSeverity.Warning,
-                    $"Failed to parse project settings: {ex.Message}"
-                ));
-            }
-        }
-
-        // Try to extract from 3D model metadata
-        var modelEntry = archive.Entries
-            .FirstOrDefault(e => e.FullName.EndsWith("3dmodel.model"));
-
-        if (modelEntry != null)
-        {
-            try
-            {
-                using var reader = new StreamReader(modelEntry.Open(), Encoding.UTF8);
-                var xml = await reader.ReadToEndAsync();
-                var doc = XDocument.Parse(xml);
-
-                var printerMeta = doc.Descendants()
-                    .FirstOrDefault(e =>
-                        e.Name.LocalName == "metadata" &&
-                        e.Attribute("name")?.Value.Contains("Printer") == true);
-
-                if (printerMeta != null)
-                {
-                    var printerName = printerMeta.Value;
-
-                    if (printerName.Contains("A1 Mini", StringComparison.OrdinalIgnoreCase))
-                        return Printers.A1M;
-                    if (printerName.Contains("A1", StringComparison.OrdinalIgnoreCase))
-                        return Printers.A1;
-                }
-            }
-            catch (Exception ex)
-            {
-                diagnostics.Add(new ExtractionDiagnostic(
-                    ExtractionSeverity.Warning,
-                    $"Failed to parse 3D model metadata: {ex.Message}"
-                ));
+                if (modelLine.Contains("A1 Mini", StringComparison.OrdinalIgnoreCase))
+                    return Printers.A1M;
+                if (modelLine.Contains("A1", StringComparison.OrdinalIgnoreCase))
+                    return Printers.A1;
             }
         }
 
@@ -317,14 +230,11 @@ public sealed class ThreeMFExtractor
             ExtractionSeverity.Info,
             "Printer model not found in metadata, defaulting to A1 Mini"
         ));
-
         return Printers.A1M;
     }
 
     private async Task<string?> ExtractThumbnail(ZipArchive archive, string gcodeFileName)
     {
-        // Determine thumbnail filename from G-code filename
-        // e.g., "plate_1.gcode" -> "plate_1.png"
         var baseName = Path.GetFileNameWithoutExtension(gcodeFileName);
         var thumbnailName = $"{baseName}.png";
 
@@ -354,7 +264,6 @@ public sealed class ThreeMFExtractor
         PrinterModel model,
         List<ExtractionDiagnostic> diagnostics)
     {
-        // Default to the most common plate change routine for each printer
         var routine = model switch
         {
             PrinterModel.A1M => new PlateChangeRoutine(
@@ -363,7 +272,7 @@ public sealed class ThreeMFExtractor
                 Model: PrinterModel.A1M,
                 GCode: PlateChangeRoutines.A1M_SwapMod
             ),
-            PrinterModel.A1 => null, // A1 doesn't have automatic plate changing by default
+            PrinterModel.A1 => null,
             _ => null
         };
 
@@ -378,4 +287,3 @@ public sealed class ThreeMFExtractor
         return routine;
     }
 }
-

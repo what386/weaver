@@ -19,7 +19,7 @@ public sealed class GCodeCompiler
     public CompileResult Compile(
         IEnumerable<ThreeMFJob> jobs,
         Printer printer,
-        PlateChangeRoutine? routine)  // Made nullable
+        PlateChangeRoutine? routine)
     {
         var diagnostics = new List<CompileDiagnostic>();
         var sb = new StringBuilder();
@@ -75,9 +75,11 @@ public sealed class GCodeCompiler
                 if (!isLastJob && activeRoutine == null)
                 {
                     diagnostics.Add(new CompileDiagnostic(
-                        DiagnosticSeverity.Warning,
+                        DiagnosticSeverity.Error,
                         $"No plate change routine specified for job '{job.PlateName}' (not last job)"
                     ));
+
+                    throw new Exception();
                 }
             }
 

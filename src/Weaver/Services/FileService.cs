@@ -15,15 +15,11 @@ public sealed record FileLoadResult(
 {
     public bool HasErrors =>
         Diagnostics.Any(d => d.Severity == FileLoadSeverity.Error);
-
     public bool HasWarnings =>
         Diagnostics.Any(d => d.Severity == FileLoadSeverity.Warning);
-
     public bool IsSuccess => Jobs.Length > 0 && !HasErrors;
-
     public IEnumerable<FileLoadDiagnostic> Errors =>
         Diagnostics.Where(d => d.Severity == FileLoadSeverity.Error);
-
     public IEnumerable<FileLoadDiagnostic> Warnings =>
         Diagnostics.Where(d => d.Severity == FileLoadSeverity.Warning);
 }
@@ -43,35 +39,11 @@ public sealed record FileLoadDiagnostic(
     public override string ToString() => $"[{Severity}] {FileName}: {Message}";
 }
 
-public static class WeaverFileTypes
-{
-    public static FilePickerFileType PrintFiles => new("3D Print Files")
-    {
-        Patterns = new[] { "*.3mf", "*.gcode" },
-        MimeTypes = new[] { "application/vnd.ms-package.3dmanufacturing-3dmodel+xml", "text/x.gcode" }
-    };
-
-    public static FilePickerFileType ThreeMF => new("3MF Files")
-    {
-        Patterns = new[] { "*.3mf" },
-        MimeTypes = new[] { "application/vnd.ms-package.3dmanufacturing-3dmodel+xml" }
-    };
-
-    public static FilePickerFileType GCode => new("G-code Files")
-    {
-        Patterns = new[] { "*.gcode" },
-        MimeTypes = new[] { "text/x.gcode" }
-    };
-}
-
 public interface IFileService
 {
     Task<FileLoadResult?> LoadFilesAsync(Window parentWindow);
     Task<FileLoadResult?> LoadFileFromPathAsync(string path);
-    Task<bool> SaveGCodeAsync(Window parentWindow, string content, string suggestedFileName);
     Task<bool> Save3MFAsync(Window parentWindow, byte[] content, string suggestedFileName);
-    Task<string?> PickSaveLocationAsync(Window parentWindow, string suggestedFileName, FilePickerFileType fileType);
-    Task<IReadOnlyList<IStorageFile>?> PickFilesAsync(Window parentWindow, FilePickerOpenOptions options);
 }
 
 public sealed class FileService : IFileService
@@ -85,9 +57,6 @@ public sealed class FileService : IFileService
         _parser = parser;
     }
 
-    /// <summary>
-    /// Opens a file picker and loads selected .3mf or .gcode files.
-    /// </summary>
     public async Task<FileLoadResult?> LoadFilesAsync(Window parentWindow)
     {
         var storageProvider = parentWindow.StorageProvider;
@@ -102,18 +71,7 @@ public sealed class FileService : IFileService
             {
                 new FilePickerFileType("3D Print Files")
                 {
-                    Patterns = new[] { "*.3mf", "*.gcode" },
-                    MimeTypes = new[] { "application/vnd.ms-package.3dmanufacturing-3dmodel+xml", "text/x.gcode" }
-                },
-                new FilePickerFileType("3MF Files")
-                {
-                    Patterns = new[] { "*.3mf" },
-                    MimeTypes = new[] { "application/vnd.ms-package.3dmanufacturing-3dmodel+xml" }
-                },
-                new FilePickerFileType("G-code Files")
-                {
-                    Patterns = new[] { "*.gcode" },
-                    MimeTypes = new[] { "text/x.gcode" }
+                    Patterns = new[] { "*.3mf", "*.gcode" }
                 },
                 FilePickerFileTypes.All
             }
@@ -126,9 +84,6 @@ public sealed class FileService : IFileService
         return await ProcessFilesAsync(files);
     }
 
-    /// <summary>
-    /// Loads a file from a file path (for drag & drop support).
-    /// </summary>
     public async Task<FileLoadResult?> LoadFileFromPathAsync(string path)
     {
         if (!File.Exists(path))
@@ -149,11 +104,10 @@ public sealed class FileService : IFileService
             switch (extension)
             {
                 case ".3mf":
-                    await using (var stream = File.OpenRead(path))
+                    using (var stream = File.OpenRead(path))
                     {
                         var result = await _extractor.ExtractJobs(stream);
 
-                        // Add extraction diagnostics
                         foreach (var diag in result.Diagnostics)
                         {
                             diagnostics.Add(new FileLoadDiagnostic(
@@ -169,56 +123,15 @@ public sealed class FileService : IFileService
                         }
 
                         if (result.IsSuccess)
-                        {
                             jobs.AddRange(result.Jobs);
-                        }
                     }
                     break;
 
                 case ".gcode":
                     var content = await File.ReadAllTextAsync(path);
-
-                    if (!_parser.ValidateGCodeFile(content))
-                    {
-                        diagnostics.Add(new FileLoadDiagnostic(
-                            FileLoadSeverity.Error,
-                            fileName,
-                            "File does not contain valid G-code metadata"
-                        ));
-                        break;
-                    }
-
-                    var parseResult = _parser.ParseGCodeFile(content, fileName);
-
-                    // Add parse diagnostics
-                    foreach (var diag in parseResult.Diagnostics)
-                    {
-                        diagnostics.Add(new FileLoadDiagnostic(
-                            diag.Severity switch
-                            {
-                                ParseDiagnosticSeverity.Error => FileLoadSeverity.Error,
-                                ParseDiagnosticSeverity.Warning => FileLoadSeverity.Warning,
-                                _ => FileLoadSeverity.Info
-                            },
-                            fileName,
-                            diag.Message
-                        ));
-                    }
-
-                    if (!parseResult.HasErrors)
-                    {
-                        var metadata = parseResult.Metadata;
-                        var job = new ThreeMFJob(
-                            PlateName: metadata.PlateName,
-                            Filaments: metadata.Filaments,
-                            EmbeddedGCode: metadata.GCode,
-                            Printer: DeterminePrinterFromMetadata(metadata.PrinterModel),
-                            Routine: null,
-                            PrintTime: metadata.PrintTime,
-                            ModelImage: metadata.ModelImage
-                        );
+                    var job = ProcessGCodeContent(content, fileName, diagnostics);
+                    if (job != null)
                         jobs.Add(job);
-                    }
                     break;
 
                 default:
@@ -242,63 +155,34 @@ public sealed class FileService : IFileService
         return new FileLoadResult(jobs.ToArray(), diagnostics);
     }
 
-    /// <summary>
-    /// Opens a save dialog for G-code files.
-    /// </summary>
-    public async Task<bool> SaveGCodeAsync(
-        Window parentWindow,
-        string content,
-        string suggestedFileName)
-    {
-        var location = await PickSaveLocationAsync(
-            parentWindow,
-            suggestedFileName,
-            new FilePickerFileType("G-code File")
-            {
-                Patterns = new[] { "*.gcode" },
-                MimeTypes = new[] { "text/x.gcode" }
-            }
-        );
-
-        if (location == null)
-            return false;
-
-        try
-        {
-            await File.WriteAllTextAsync(location, content);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Failed to save G-code: {ex.Message}");
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Opens a save dialog for 3MF files.
-    /// </summary>
     public async Task<bool> Save3MFAsync(
         Window parentWindow,
         byte[] content,
         string suggestedFileName)
     {
-        var location = await PickSaveLocationAsync(
-            parentWindow,
-            suggestedFileName,
-            new FilePickerFileType("3MF File")
-            {
-                Patterns = new[] { "*.3mf" },
-                MimeTypes = new[] { "application/vnd.ms-package.3dmanufacturing-3dmodel+xml" }
-            }
-        );
+        var storageProvider = parentWindow.StorageProvider;
+        if (!storageProvider.CanSave)
+            return false;
 
-        if (location == null)
+        var options = new FilePickerSaveOptions
+        {
+            Title = "Save 3MF File",
+            SuggestedFileName = suggestedFileName,
+            FileTypeChoices = new[]
+            {
+                new FilePickerFileType("3MF File") { Patterns = new[] { "*.3mf" } },
+                FilePickerFileTypes.All
+            },
+            ShowOverwritePrompt = true
+        };
+
+        var file = await storageProvider.SaveFilePickerAsync(options);
+        if (file == null)
             return false;
 
         try
         {
-            await File.WriteAllBytesAsync(location, content);
+            await File.WriteAllBytesAsync(file.Path.LocalPath, content);
             return true;
         }
         catch (Exception ex)
@@ -306,44 +190,6 @@ public sealed class FileService : IFileService
             Console.WriteLine($"Failed to save 3MF: {ex.Message}");
             return false;
         }
-    }
-
-    /// <summary>
-    /// Opens a save file picker and returns the selected path.
-    /// </summary>
-    public async Task<string?> PickSaveLocationAsync(
-        Window parentWindow,
-        string suggestedFileName,
-        FilePickerFileType fileType)
-    {
-        var storageProvider = parentWindow.StorageProvider;
-        if (!storageProvider.CanSave)
-            return null;
-
-        var options = new FilePickerSaveOptions
-        {
-            Title = "Save File",
-            SuggestedFileName = suggestedFileName,
-            FileTypeChoices = new[] { fileType, FilePickerFileTypes.All },
-            ShowOverwritePrompt = true
-        };
-
-        var file = await storageProvider.SaveFilePickerAsync(options);
-        return file?.Path.LocalPath;
-    }
-
-    /// <summary>
-    /// Opens a file picker with custom options.
-    /// </summary>
-    public async Task<IReadOnlyList<IStorageFile>?> PickFilesAsync(
-        Window parentWindow,
-        FilePickerOpenOptions options)
-    {
-        var storageProvider = parentWindow.StorageProvider;
-        if (!storageProvider.CanOpen)
-            return null;
-
-        return await storageProvider.OpenFilePickerAsync(options);
     }
 
     private async Task<FileLoadResult> ProcessFilesAsync(IReadOnlyList<IStorageFile> files)
@@ -361,11 +207,52 @@ public sealed class FileService : IFileService
                 switch (extension)
                 {
                     case ".3mf":
-                        await Process3MFFileAsync(file, jobs, diagnostics);
+                        await using (var stream = await file.OpenReadAsync())
+                        {
+                            var result = await _extractor.ExtractJobs(stream);
+
+                            foreach (var diag in result.Diagnostics)
+                            {
+                                diagnostics.Add(new FileLoadDiagnostic(
+                                    diag.Severity switch
+                                    {
+                                        ExtractionSeverity.Error => FileLoadSeverity.Error,
+                                        ExtractionSeverity.Warning => FileLoadSeverity.Warning,
+                                        _ => FileLoadSeverity.Info
+                                    },
+                                    fileName,
+                                    diag.Message
+                                ));
+                            }
+
+                            if (result.IsSuccess)
+                            {
+                                jobs.AddRange(result.Jobs);
+                                diagnostics.Add(new FileLoadDiagnostic(
+                                    FileLoadSeverity.Info,
+                                    fileName,
+                                    $"Successfully loaded {result.Jobs.Length} job(s)"
+                                ));
+                            }
+                        }
                         break;
 
                     case ".gcode":
-                        await ProcessGCodeFileAsync(file, jobs, diagnostics);
+                        await using (var stream = await file.OpenReadAsync())
+                        using (var reader = new StreamReader(stream))
+                        {
+                            var content = await reader.ReadToEndAsync();
+                            var job = ProcessGCodeContent(content, fileName, diagnostics);
+                            if (job != null)
+                            {
+                                jobs.Add(job);
+                                diagnostics.Add(new FileLoadDiagnostic(
+                                    FileLoadSeverity.Info,
+                                    fileName,
+                                    "Successfully loaded G-code file"
+                                ));
+                            }
+                        }
                         break;
 
                     default:
@@ -390,64 +277,23 @@ public sealed class FileService : IFileService
         return new FileLoadResult(jobs.ToArray(), diagnostics);
     }
 
-    private async Task Process3MFFileAsync(
-        IStorageFile file,
-        List<ThreeMFJob> jobs,
+    private ThreeMFJob? ProcessGCodeContent(
+        string content,
+        string fileName,
         List<FileLoadDiagnostic> diagnostics)
     {
-        await using var stream = await file.OpenReadAsync();
-        var result = await _extractor.ExtractJobs(stream);
-
-        // Add extraction diagnostics
-        foreach (var diag in result.Diagnostics)
-        {
-            diagnostics.Add(new FileLoadDiagnostic(
-                diag.Severity switch
-                {
-                    ExtractionSeverity.Error => FileLoadSeverity.Error,
-                    ExtractionSeverity.Warning => FileLoadSeverity.Warning,
-                    _ => FileLoadSeverity.Info
-                },
-                file.Name,
-                diag.Message
-            ));
-        }
-
-        if (result.IsSuccess)
-        {
-            jobs.AddRange(result.Jobs);
-            diagnostics.Add(new FileLoadDiagnostic(
-                FileLoadSeverity.Info,
-                file.Name,
-                $"Successfully loaded {result.Jobs.Length} job(s)"
-            ));
-        }
-    }
-
-    private async Task ProcessGCodeFileAsync(
-        IStorageFile file,
-        List<ThreeMFJob> jobs,
-        List<FileLoadDiagnostic> diagnostics)
-    {
-        await using var stream = await file.OpenReadAsync();
-        using var reader = new StreamReader(stream);
-        var content = await reader.ReadToEndAsync();
-
-        // Validate G-code
         if (!_parser.ValidateGCodeFile(content))
         {
             diagnostics.Add(new FileLoadDiagnostic(
                 FileLoadSeverity.Error,
-                file.Name,
+                fileName,
                 "File does not contain valid G-code metadata"
             ));
-            return;
+            return null;
         }
 
-        // Parse G-code
-        var parseResult = _parser.ParseGCodeFile(content, file.Name);
+        var parseResult = _parser.ParseGCodeFile(content, fileName);
 
-        // Add parse diagnostics
         foreach (var diag in parseResult.Diagnostics)
         {
             diagnostics.Add(new FileLoadDiagnostic(
@@ -457,31 +303,26 @@ public sealed class FileService : IFileService
                     ParseDiagnosticSeverity.Warning => FileLoadSeverity.Warning,
                     _ => FileLoadSeverity.Info
                 },
-                file.Name,
+                fileName,
                 diag.Message
             ));
         }
 
-        if (!parseResult.HasErrors)
-        {
-            var metadata = parseResult.Metadata;
-            var job = new ThreeMFJob(
-                PlateName: metadata.PlateName,
-                Filaments: metadata.Filaments,
-                EmbeddedGCode: metadata.GCode,
-                Printer: DeterminePrinterFromMetadata(metadata.PrinterModel),
-                Routine: null,
-                PrintTime: metadata.PrintTime,
-                ModelImage: metadata.ModelImage
-            );
+        if (parseResult.HasErrors)
+            return null;
 
-            jobs.Add(job);
-            diagnostics.Add(new FileLoadDiagnostic(
-                FileLoadSeverity.Info,
-                file.Name,
-                "Successfully loaded G-code file"
-            ));
-        }
+        var metadata = parseResult.Metadata;
+
+        return new ThreeMFJob(
+            PlateName: metadata.PlateName,
+            Filaments: metadata.Filaments,
+            EmbeddedGCode: metadata.GCode,
+            Printer: DeterminePrinterFromMetadata(metadata.PrinterModel),
+            Routine: null,
+            PrintTime: metadata.PrintTime,
+            ModelImage: metadata.ModelImage,
+            Source3MFFile: null  // Standalone G-code has no source 3MF
+        );
     }
 
     private static Printer DeterminePrinterFromMetadata(PrinterModel model)
@@ -490,7 +331,7 @@ public sealed class FileService : IFileService
         {
             PrinterModel.A1M => Printers.A1M,
             PrinterModel.A1 => Printers.A1,
-            _ => Printers.A1M // Default fallback
+            _ => Printers.A1M
         };
     }
 }
